@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { PDFDocument } from 'pdf-lib';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import { Capacitor } from '@capacitor/core';
 
 type Tab = 'merge' | 'split';
 
@@ -17,7 +20,34 @@ interface PDFFile {
   size: number;
 }
 
-// ✅ Reusable download helper — no external dependency
+// ✅ Capacitor save helper (works on Android)
+const saveToDevice = async (blob: Blob, fileName: string): Promise<boolean> => {
+  if (!Capacitor.isNativePlatform()) return false;
+  try {
+    const reader = new FileReader();
+    const base64 = await new Promise<string>((resolve, reject) => {
+      reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    await Filesystem.writeFile({
+      path: fileName,
+      data: base64,
+      directory: Directory.Documents,
+    });
+    await Share.share({
+      title: 'PDF Saved',
+      text: 'Your PDF file is ready.',
+      url: `file://${fileName}`,
+    }).catch(() => {});
+    return true;
+  } catch (error) {
+    console.error('Save error:', error);
+    return false;
+  }
+};
+
+// ✅ Web fallback (anchor download)
 const triggerDownload = (blob: Blob, fileName: string) => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -107,9 +137,10 @@ export default function PDFTools() {
       }
       const bytes = await merged.save();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      // ✅ FIXED: direct anchor download
-      triggerDownload(blob, `merged_${Date.now()}.pdf`);
-      showNotification('Merge complete! Downloading…', 'info');
+      const fileName = `merged_${Date.now()}.pdf`;
+      const saved = await saveToDevice(blob, fileName);
+      if (!saved) triggerDownload(blob, fileName);
+      showNotification('Merge complete!', 'info');
       setMergeDone(true);
     } catch (err) {
       console.error(err);
@@ -171,9 +202,9 @@ export default function PDFTools() {
     setSplitting(false);
   };
 
-  // ✅ FIXED: direct anchor download
-  const downloadSplit = (item: { name: string; blob: Blob }) => {
-    triggerDownload(item.blob, item.name);
+  const downloadSplit = async (item: { name: string; blob: Blob }) => {
+    const saved = await saveToDevice(item.blob, item.name);
+    if (!saved) triggerDownload(item.blob, item.name);
     showNotification(`Downloading ${item.name}`, 'info');
   };
 
