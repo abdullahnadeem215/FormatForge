@@ -38,7 +38,6 @@ export default function PDFTools() {
   // Notification state
   const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
 
-  // Auto-dismiss notification
   useEffect(() => {
     if (notification) {
       const timer = setTimeout(() => setNotification(null), 3000);
@@ -50,7 +49,6 @@ export default function PDFTools() {
     setNotification({ message, type });
   };
 
-  // ── Helpers ──
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -63,21 +61,27 @@ export default function PDFTools() {
     return pdf.getPageCount();
   };
 
-  // ── Generic download (mobile‑friendly) ──
+  // ✅ Mobile-friendly download for PDFs
   const downloadBlob = async (blob: Blob, fileName: string) => {
-    try {
-      // 1. Use Web Share API on mobile if available
-      if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    // Use share API on mobile
+    if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      try {
         const file = new File([blob], fileName, { type: 'application/pdf' });
         await navigator.share({
-          title: 'PDF File',
+          title: 'Save PDF',
           files: [file],
         });
         showNotification(`Shared: ${fileName}`, 'info');
         return;
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('Share failed:', err);
+        }
       }
+    }
 
-      // 2. Fallback: create object URL + a.download
+    // Fallback for desktop / unsupported mobile: a.download with object URL
+    try {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -86,10 +90,9 @@ export default function PDFTools() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showNotification(`Downloaded: ${fileName} 📁`, 'info');
+      showNotification(`Downloaded: ${fileName}`, 'info');
     } catch (err) {
-      console.error('Download failed:', err);
-      showNotification('Could not save automatically. Try long‑pressing the button.', 'error');
+      showNotification('Could not save automatically. Try using the share button.', 'error');
     }
   };
 
@@ -319,7 +322,7 @@ export default function PDFTools() {
 
             {mergeDone && (
               <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
-                <Check className="w-4 h-4" /> Merge complete! PDF saved/shared.
+                <Check className="w-4 h-4" /> Merge complete! File saved/shared.
               </div>
             )}
 
@@ -416,7 +419,7 @@ export default function PDFTools() {
                         <button onClick={() => downloadSplit(item)}
                           className="flex items-center gap-2 px-3 py-1.5 bg-accent-grad rounded-lg text-white text-[10px] font-bold"
                         >
-                          <Download className="w-3.5 h-3.5" /> Download
+                          <Download className="w-3.5 h-3.5" /> Save
                         </button>
                       </div>
                     ))}
