@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { PDFDocument } from 'pdf-lib';
+import { downloadBlob } from '../utils/download';
 
 type Tab = 'merge' | 'split';
 
@@ -19,28 +20,24 @@ interface PDFFile {
 
 export default function PDFTools() {
   const [tab, setTab] = useState<Tab>('merge');
+  const [mergeFiles, setMergeFiles] = useState<PDFFile[]>([]);
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState('');
+  const [mergeDone, setMergeDone] = useState(false);
+  const mergeInputRef = useRef<HTMLInputElement>(null);
 
-  // Merge state
-  const [mergeFiles, setMergeFiles]     = useState<PDFFile[]>([]);
-  const [merging, setMerging]           = useState(false);
-  const [mergeError, setMergeError]     = useState('');
-  const [mergeDone, setMergeDone]       = useState(false);
-  const mergeInputRef                   = useRef<HTMLInputElement>(null);
-
-  // Split state
-  const [splitFile, setSplitFile]       = useState<PDFFile | null>(null);
-  const [splitRanges, setSplitRanges]   = useState('');
-  const [splitting, setSplitting]       = useState(false);
-  const [splitError, setSplitError]     = useState('');
+  const [splitFile, setSplitFile] = useState<PDFFile | null>(null);
+  const [splitRanges, setSplitRanges] = useState('');
+  const [splitting, setSplitting] = useState(false);
+  const [splitError, setSplitError] = useState('');
   const [splitResults, setSplitResults] = useState<{ name: string; blob: Blob }[]>([]);
-  const splitInputRef                   = useRef<HTMLInputElement>(null);
+  const splitInputRef = useRef<HTMLInputElement>(null);
 
-  // Notification state
   const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
 
   useEffect(() => {
     if (notification) {
-      const timer = setTimeout(() => setNotification(null), 3000);
+      const timer = setTimeout(() => setNotification(null), 4000);
       return () => clearTimeout(timer);
     }
   }, [notification]);
@@ -61,42 +58,7 @@ export default function PDFTools() {
     return pdf.getPageCount();
   };
 
-  // ✅ Mobile-friendly download for PDFs
-  const downloadBlob = async (blob: Blob, fileName: string) => {
-    // Use share API on mobile
-    if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-      try {
-        const file = new File([blob], fileName, { type: 'application/pdf' });
-        await navigator.share({
-          title: 'Save PDF',
-          files: [file],
-        });
-        showNotification(`Shared: ${fileName}`, 'info');
-        return;
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          console.warn('Share failed:', err);
-        }
-      }
-    }
-
-    // Fallback for desktop / unsupported mobile: a.download with object URL
-    try {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showNotification(`Downloaded: ${fileName}`, 'info');
-    } catch (err) {
-      showNotification('Could not save automatically. Try using the share button.', 'error');
-    }
-  };
-
-  // ── MERGE ──
+  // ---- Merge ----
   const handleMergeFiles = async (fileList: FileList | null) => {
     if (!fileList) return;
     setMergeError('');
@@ -137,7 +99,7 @@ export default function PDFTools() {
       const bytes = await merged.save();
       const blob = new Blob([bytes], { type: 'application/pdf' });
       const fileName = `merged_${Date.now()}.pdf`;
-      await downloadBlob(blob, fileName);
+      await downloadBlob(blob, fileName, showNotification);
       setMergeDone(true);
     } catch (err) {
       console.error(err);
@@ -146,7 +108,7 @@ export default function PDFTools() {
     setMerging(false);
   };
 
-  // ── SPLIT ──
+  // ---- Split ----
   const handleSplitFile = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     setSplitError(''); setSplitResults([]);
@@ -200,17 +162,11 @@ export default function PDFTools() {
   };
 
   const downloadSplit = async (item: { name: string; blob: Blob }) => {
-    await downloadBlob(item.blob, item.name);
+    await downloadBlob(item.blob, item.name, showNotification);
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-8 relative"
-    >
-      {/* Toast Notification */}
+    <motion.div className="space-y-8 relative">
       <AnimatePresence>
         {notification && (
           <motion.div
@@ -227,7 +183,6 @@ export default function PDFTools() {
         )}
       </AnimatePresence>
 
-      {/* Header */}
       <header>
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/5">
@@ -237,13 +192,9 @@ export default function PDFTools() {
             <h1 className="text-2xl font-bold tracking-tight">PDF Tools</h1>
             <p className="text-text-dim text-xs">Merge & split PDF files. 100% offline.</p>
           </div>
-          <span className="ml-auto px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-md text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
-            NEW
-          </span>
         </div>
       </header>
 
-      {/* Tab switcher */}
       <div className="flex gap-2 p-1 bg-surface border border-border rounded-xl w-fit">
         {(['merge', 'split'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
@@ -255,12 +206,8 @@ export default function PDFTools() {
       </div>
 
       <AnimatePresence mode="wait">
-
-        {/* ══════════ MERGE TAB ══════════ */}
         {tab === 'merge' && (
-          <motion.div key="merge" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-5">
-
-            {/* Upload */}
+          <motion.div key="merge" className="space-y-5">
             <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
               <p className="text-[10px] font-bold uppercase tracking-widest text-text-dim">Upload PDF Files</p>
               <input ref={mergeInputRef} type="file" accept=".pdf" multiple className="hidden"
@@ -275,166 +222,84 @@ export default function PDFTools() {
               </button>
             </div>
 
-            {/* File list */}
-            <AnimatePresence>
-              {mergeFiles.length > 0 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-text-dim">Order ({mergeFiles.length} files)</p>
-                    <button onClick={() => { setMergeFiles([]); setMergeDone(false); }} className="text-[10px] text-red-400 font-bold hover:opacity-80">CLEAR ALL</button>
+            {mergeFiles.length > 0 && (
+              <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
+                <div className="flex justify-between">
+                  <p className="text-[10px] font-bold uppercase">Order ({mergeFiles.length})</p>
+                  <button onClick={() => setMergeFiles([])} className="text-red-400 text-[10px]">CLEAR ALL</button>
+                </div>
+                {mergeFiles.map((item, idx) => (
+                  <div key={item.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl">
+                    <div className="flex flex-col gap-1">
+                      <button onClick={() => moveFile(idx, -1)} disabled={idx === 0} className="text-text-dim hover:text-white"><ChevronUp className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => moveFile(idx, 1)} disabled={idx === mergeFiles.length-1} className="text-text-dim hover:text-white"><ChevronDown className="w-3.5 h-3.5" /></button>
+                    </div>
+                    <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center"><FileText className="w-4 h-4 text-red-400" /></div>
+                    <div className="flex-1"><p className="text-sm truncate">{item.name}</p><p className="text-[10px] text-text-dim">{item.pageCount} pages • {formatSize(item.size)}</p></div>
+                    <button onClick={() => removeMergeFile(item.id)}><X className="w-4 h-4 text-text-dim hover:text-red-400" /></button>
                   </div>
-                  <div className="space-y-2">
-                    {mergeFiles.map((item, idx) => (
-                      <motion.div key={item.id} layout
-                        className="flex items-center gap-3 p-3 bg-white/5 rounded-xl border border-border"
-                      >
-                        <div className="flex flex-col gap-1">
-                          <button onClick={() => moveFile(idx, -1)} disabled={idx === 0} className="text-text-dim hover:text-white disabled:opacity-20">
-                            <ChevronUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => moveFile(idx, 1)} disabled={idx === mergeFiles.length - 1} className="text-text-dim hover:text-white disabled:opacity-20">
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        <div className="w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                          <FileText className="w-4 h-4 text-red-400" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold truncate">{item.name}</p>
-                          <p className="text-[10px] text-text-dim">{item.pageCount} pages • {formatSize(item.size)}</p>
-                        </div>
-                        <button onClick={() => removeMergeFile(item.id)} className="text-text-dim hover:text-red-400 transition-colors">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </motion.div>
-                    ))}
-                  </div>
-                  <button onClick={() => mergeInputRef.current?.click()}
-                    className="w-full py-2.5 bg-white/5 border border-border rounded-xl text-text-dim text-xs font-semibold hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-2"
-                  >
-                    <Upload className="w-3.5 h-3.5" /> Add More Files
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {mergeError && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{mergeError}</div>}
-
-            {mergeDone && (
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
-                <Check className="w-4 h-4" /> Merge complete! File saved/shared.
+                ))}
+                <button onClick={() => mergeInputRef.current?.click()} className="w-full py-2.5 bg-white/5 rounded-xl text-xs">+ Add More Files</button>
               </div>
             )}
 
+            {mergeError && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{mergeError}</div>}
+            {mergeDone && <div className="p-4 bg-emerald-500/10 rounded-xl text-emerald-400 text-xs flex items-center gap-2"><Check className="w-4 h-4" /> Merge complete!</div>}
+
             <button onClick={doMerge} disabled={mergeFiles.length < 2 || merging}
-              className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold text-sm tracking-wide disabled:opacity-40 flex items-center justify-center gap-2"
-            >
-              {merging
-                ? <><span className="animate-spin inline-block">↻</span> Merging...</>
-                : <><Merge className="w-4 h-4" /> Merge {mergeFiles.length > 0 ? `${mergeFiles.length} PDFs` : 'PDFs'}</>
-              }
+              className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+              {merging ? <><span className="animate-spin">↻</span> Merging...</> : <><Merge className="w-4 h-4" /> Merge {mergeFiles.length} PDFs</>}
             </button>
           </motion.div>
         )}
 
-        {/* ══════════ SPLIT TAB ══════════ */}
         {tab === 'split' && (
-          <motion.div key="split" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }} className="space-y-5">
-
-            {/* Upload */}
+          <motion.div key="split" className="space-y-5">
             <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-text-dim">Upload PDF File</p>
-              <input ref={splitInputRef} type="file" accept=".pdf" className="hidden"
-                onChange={e => handleSplitFile(e.target.files)}
-              />
+              <p className="text-[10px] font-bold uppercase">Upload PDF File</p>
+              <input ref={splitInputRef} type="file" accept=".pdf" className="hidden" onChange={e => handleSplitFile(e.target.files)} />
               {!splitFile ? (
-                <button onClick={() => splitInputRef.current?.click()}
-                  className="w-full py-8 border-2 border-dashed border-border rounded-xl flex flex-col items-center gap-3 text-text-dim hover:border-purple-500/40 hover:text-white transition-all"
-                >
-                  <Upload className="w-8 h-8" />
-                  <span className="text-xs font-semibold uppercase tracking-wider">Upload PDF File</span>
-                  <span className="text-[10px]">Select a PDF to split</span>
+                <button onClick={() => splitInputRef.current?.click()} className="w-full py-8 border-2 border-dashed rounded-xl flex flex-col items-center gap-3">
+                  <Upload className="w-8 h-8" /><span className="text-xs">Upload PDF File</span>
                 </button>
               ) : (
-                <div className="flex items-center gap-3 p-4 bg-white/5 rounded-xl border border-border">
-                  <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                    <FileText className="w-5 h-5 text-red-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{splitFile.name}</p>
-                    <p className="text-[10px] text-text-dim">{splitFile.pageCount} pages • {formatSize(splitFile.size)}</p>
-                  </div>
-                  <button onClick={() => { setSplitFile(null); setSplitResults([]); setSplitError(''); }} className="text-text-dim hover:text-red-400 transition-colors">
-                    <X className="w-4 h-4" />
-                  </button>
+                <div className="flex items-center gap-3 p-4 bg-white/5 rounded-xl">
+                  <FileText className="w-5 h-5 text-red-400" />
+                  <div className="flex-1"><p className="text-sm truncate">{splitFile.name}</p><p className="text-[10px] text-text-dim">{splitFile.pageCount} pages • {formatSize(splitFile.size)}</p></div>
+                  <button onClick={() => setSplitFile(null)}><X className="w-4 h-4" /></button>
                 </div>
               )}
             </div>
 
-            {/* Page ranges */}
             {splitFile && (
               <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-text-dim">Page Ranges</p>
-                <p className="text-[11px] text-text-dim">Total pages: <span className="text-white font-bold">{splitFile.pageCount}</span> — Enter ranges separated by commas</p>
-                <input
-                  type="text" value={splitRanges}
-                  onChange={e => setSplitRanges(e.target.value)}
-                  placeholder="e.g. 1-3, 4-6, 7"
-                  className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm text-white placeholder:text-text-dim focus:outline-none focus:border-purple-500/50 transition-colors font-mono"
-                />
+                <p className="text-[10px] font-bold uppercase">Page Ranges</p>
+                <p className="text-xs text-text-dim">Total pages: <span className="text-white font-bold">{splitFile.pageCount}</span></p>
+                <input type="text" value={splitRanges} onChange={e => setSplitRanges(e.target.value)} placeholder="e.g. 1-3, 4-6, 7" className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm" />
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: 'First Half', value: `1-${Math.ceil(splitFile.pageCount / 2)}` },
-                    { label: 'Second Half', value: `${Math.ceil(splitFile.pageCount / 2) + 1}-${splitFile.pageCount}` },
-                    { label: 'Each Page', value: Array.from({ length: splitFile.pageCount }, (_, i) => i + 1).join(', ') },
-                  ].map(preset => (
-                    <button key={preset.label} onClick={() => setSplitRanges(preset.value)}
-                      className="px-3 py-1.5 bg-white/5 border border-border rounded-lg text-[10px] font-semibold text-text-dim hover:text-white hover:border-white/20 transition-all"
-                    >{preset.label}</button>
-                  ))}
+                  <button onClick={() => setSplitRanges(`1-${Math.ceil(splitFile.pageCount/2)}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">First Half</button>
+                  <button onClick={() => setSplitRanges(`${Math.ceil(splitFile.pageCount/2)+1}-${splitFile.pageCount}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Second Half</button>
+                  <button onClick={() => setSplitRanges(Array.from({length: splitFile.pageCount}, (_,i)=>i+1).join(', '))} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Each Page</button>
                 </div>
               </div>
             )}
 
-            {splitError && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{splitError}</div>}
+            {splitError && <div className="p-4 bg-red-500/10 rounded-xl text-red-400 text-xs">{splitError}</div>}
 
-            {/* Split results */}
-            <AnimatePresence>
-              {splitResults.length > 0 && (
-                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-                  className="p-6 bg-surface border border-emerald-500/20 rounded-[24px] space-y-4"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Split Complete — {splitResults.length} parts</p>
+            {splitResults.length > 0 && (
+              <div className="p-6 bg-surface border border-emerald-500/20 rounded-[24px] space-y-4">
+                <p className="text-[10px] font-bold text-emerald-400">Split Complete — {splitResults.length} parts</p>
+                {splitResults.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
+                    <div><span className="text-sm">Part {idx+1}</span><span className="text-[10px] text-text-dim ml-2">{formatSize(item.blob.size)}</span></div>
+                    <button onClick={() => downloadSplit(item)} className="flex items-center gap-2 px-3 py-1.5 bg-accent-grad rounded-lg text-white text-[10px]"><Download className="w-3.5 h-3.5" /> Save</button>
                   </div>
-                  <div className="space-y-2">
-                    {splitResults.map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-border">
-                        <div className="flex items-center gap-3">
-                          <FileText className="w-4 h-4 text-red-400" />
-                          <span className="text-sm font-semibold">Part {idx + 1}</span>
-                          <span className="text-[10px] text-text-dim">{formatSize(item.blob.size)}</span>
-                        </div>
-                        <button onClick={() => downloadSplit(item)}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-accent-grad rounded-lg text-white text-[10px] font-bold"
-                        >
-                          <Download className="w-3.5 h-3.5" /> Save
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                ))}
+              </div>
+            )}
 
-            <button onClick={doSplit} disabled={!splitFile || splitting}
-              className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold text-sm tracking-wide disabled:opacity-40 flex items-center justify-center gap-2"
-            >
-              {splitting
-                ? <><span className="animate-spin inline-block">↻</span> Splitting...</>
-                : <><Scissors className="w-4 h-4" /> Split PDF</>
-              }
+            <button onClick={doSplit} disabled={!splitFile || splitting} className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+              {splitting ? <><span className="animate-spin">↻</span> Splitting...</> : <><Scissors className="w-4 h-4" /> Split PDF</>}
             </button>
           </motion.div>
         )}
