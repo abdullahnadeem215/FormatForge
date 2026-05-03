@@ -38,11 +38,27 @@ export default function QRCodePage() {
   const [scanning, setScanning]     = useState(false);
   const [scanError, setScanError]   = useState('');
   const [scanCopied, setScanCopied] = useState(false);
+  
+  // Notification state
+  const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
+  
   const videoRef     = useRef<HTMLVideoElement>(null);
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const streamRef    = useRef<MediaStream | null>(null);
   const rafRef       = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-dismiss notification
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  const showNotification = (message: string, type: 'info' | 'error' = 'info') => {
+    setNotification({ message, type });
+  };
 
   const buildQrString = (): string => {
     switch (qrType) {
@@ -67,12 +83,44 @@ export default function QRCodePage() {
     setGenerating(false);
   };
 
-  const downloadQR = () => {
-    if (!qrDataUrl) return;
-    const a = document.createElement('a');
-    a.href = qrDataUrl;
-    a.download = `formatforge-qr-${Date.now()}.png`;
-    a.click();
+  // ✅ MOBILE-FRIENDLY DOWNLOAD (works on iOS/Android + shows notification)
+  const downloadQR = async () => {
+    if (!qrDataUrl) {
+      showNotification('No QR code to download', 'error');
+      return;
+    }
+
+    try {
+      // Convert data URL to blob
+      const res = await fetch(qrDataUrl);
+      const blob = await res.blob();
+      const fileName = `formatforge-qr-${Date.now()}.png`;
+
+      // 1. Use Web Share API on mobile (shares to Files / Photos / etc.)
+      if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        await navigator.share({
+          title: 'QR Code',
+          files: [new File([blob], fileName, { type: 'image/png' })],
+        });
+        showNotification('QR code shared successfully ✓', 'info');
+        return;
+      }
+
+      // 2. Fallback: create object URL and trigger download (works on desktop & some mobile browsers)
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showNotification('QR code saved to your Downloads folder 📁', 'info');
+    } catch (err) {
+      console.error('Download failed:', err);
+      showNotification('Could not save automatically. Try long-pressing the QR code image.', 'error');
+    }
   };
 
   const copyQR = async () => {
@@ -80,8 +128,13 @@ export default function QRCodePage() {
     try {
       const blob = await (await fetch(qrDataUrl)).blob();
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      setCopied(true); setTimeout(() => setCopied(false), 2000);
-    } catch { setCopied(false); }
+      setCopied(true); 
+      showNotification('QR code copied to clipboard!', 'info');
+      setTimeout(() => setCopied(false), 2000);
+    } catch { 
+      setCopied(false);
+      showNotification('Failed to copy image', 'error');
+    }
   };
 
   const resetGen = () => { setQrDataUrl(null); setInputValue(''); setGenError(''); };
@@ -106,7 +159,7 @@ export default function QRCodePage() {
     ctx.drawImage(video, 0, 0);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(imageData.data, imageData.width, imageData.height);
-    if (code) { setScanResult(code.data); stopCamera(); return; }
+    if (code) { setScanResult(code.data); stopCamera(); showNotification('QR code detected!', 'info'); return; }
     rafRef.current = requestAnimationFrame(scanFrame);
   }, [stopCamera]);
 
@@ -133,7 +186,7 @@ export default function QRCodePage() {
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = jsQR(imageData.data, imageData.width, imageData.height);
-      if (code) { setScanResult(code.data); return; }
+      if (code) { setScanResult(code.data); showNotification('QR code scanned successfully!', 'info'); return; }
       setScanError('No QR code found in this image.');
     } catch { setScanError('Failed to scan the image.'); }
   };
@@ -141,11 +194,30 @@ export default function QRCodePage() {
   const copyScanResult = async () => {
     if (!scanResult) return;
     await navigator.clipboard.writeText(scanResult);
-    setScanCopied(true); setTimeout(() => setScanCopied(false), 2000);
+    setScanCopied(true); 
+    showNotification('Text copied to clipboard!', 'info');
+    setTimeout(() => setScanCopied(false), 2000);
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8 relative">
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={cn(
+              "fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md",
+              notification.type === 'error' ? "bg-red-500/90 text-white" : "bg-emerald-500/90 text-white"
+            )}
+          >
+            {notification.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header>
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/5">
@@ -246,9 +318,11 @@ export default function QRCodePage() {
                     <img src={qrDataUrl} alt="QR Code" className="rounded-xl" style={{ width: Math.min(qrSize, 260), height: Math.min(qrSize, 260) }} />
                   </div>
                 </div>
+                {/* Mobile hint */}
+                <p className="text-center text-[10px] text-text-dim">💡 Long-press the QR code to save image</p>
                 <div className="flex gap-3">
                   <button onClick={downloadQR} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2">
-                    <Download className="w-4 h-4" /> Download
+                    <Download className="w-4 h-4" /> Save / Share
                   </button>
                   <button onClick={copyQR} className="px-4 py-2.5 bg-white/5 border border-border rounded-xl text-white text-sm flex items-center gap-2 hover:border-white/20 transition-colors">
                     {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
