@@ -1,39 +1,51 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  FileText, Download, Upload, Trash2, X,
-  Merge, Scissors, ChevronUp, ChevronDown, Check,
+  QrCode, Download, Upload, Copy, Check,
+  Camera, Link, Type, Wifi, Phone, Mail, Trash2, ScanLine, X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { PDFDocument } from 'pdf-lib';
+import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 import { downloadBlob } from '../utils/download';
 
-type Tab = 'merge' | 'split';
+type Tab = 'generate' | 'scan';
+type QRType = 'text' | 'url' | 'wifi' | 'phone' | 'email';
 
-interface PDFFile {
-  id: string;
-  file: File;
-  name: string;
-  pageCount: number;
-  size: number;
-}
+const QR_TYPES = [
+  { id: 'url' as QRType,   label: 'URL',   icon: <Link  className="w-4 h-4" />, placeholder: 'https://example.com' },
+  { id: 'text' as QRType,  label: 'Text',  icon: <Type  className="w-4 h-4" />, placeholder: 'Enter any text...' },
+  { id: 'wifi' as QRType,  label: 'WiFi',  icon: <Wifi  className="w-4 h-4" />, placeholder: 'Network name (SSID)' },
+  { id: 'phone' as QRType, label: 'Phone', icon: <Phone className="w-4 h-4" />, placeholder: '+92 300 0000000' },
+  { id: 'email' as QRType, label: 'Email', icon: <Mail  className="w-4 h-4" />, placeholder: 'email@example.com' },
+];
 
-export default function PDFTools() {
-  const [tab, setTab] = useState<Tab>('merge');
-  const [mergeFiles, setMergeFiles] = useState<PDFFile[]>([]);
-  const [merging, setMerging] = useState(false);
-  const [mergeError, setMergeError] = useState('');
-  const [mergeDone, setMergeDone] = useState(false);
-  const mergeInputRef = useRef<HTMLInputElement>(null);
+const COLORS = ['#ffffff','#818cf8','#c084fc','#f472b6','#34d399','#38bdf8','#fb923c','#f87171'];
 
-  const [splitFile, setSplitFile] = useState<PDFFile | null>(null);
-  const [splitRanges, setSplitRanges] = useState('');
-  const [splitting, setSplitting] = useState(false);
-  const [splitError, setSplitError] = useState('');
-  const [splitResults, setSplitResults] = useState<{ name: string; blob: Blob }[]>([]);
-  const splitInputRef = useRef<HTMLInputElement>(null);
-
+export default function QRCodePage() {
+  const [tab, setTab] = useState<Tab>('generate');
+  const [qrType, setQrType] = useState<QRType>('url');
+  const [inputValue, setInputValue] = useState('');
+  const [wifiPass, setWifiPass] = useState('');
+  const [wifiSec, setWifiSec] = useState('WPA');
+  const [fgColor, setFgColor] = useState('#ffffff');
+  const [bgColor] = useState('#08080A');
+  const [qrSize, setQrSize] = useState(280);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState('');
+  const [scanResult, setScanResult] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanCopied, setScanCopied] = useState(false);
   const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (notification) {
@@ -46,261 +58,227 @@ export default function PDFTools() {
     setNotification({ message, type });
   };
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const loadPDF = async (file: File): Promise<number> => {
-    const buf = await file.arrayBuffer();
-    const pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
-    return pdf.getPageCount();
-  };
-
-  // ---- Merge ----
-  const handleMergeFiles = async (fileList: FileList | null) => {
-    if (!fileList) return;
-    setMergeError('');
-    const arr = Array.from(fileList).filter(f => f.type === 'application/pdf');
-    if (arr.length === 0) { setMergeError('Please select PDF files only.'); return; }
-    const newFiles: PDFFile[] = [];
-    for (const file of arr) {
-      try {
-        const pageCount = await loadPDF(file);
-        newFiles.push({ id: `pdf_${Date.now()}_${Math.random()}`, file, name: file.name, pageCount, size: file.size });
-      } catch { setMergeError(`Could not read: ${file.name}`); }
+  const buildQrString = (): string => {
+    switch (qrType) {
+      case 'phone': return `tel:${inputValue}`;
+      case 'email': return `mailto:${inputValue}`;
+      case 'wifi':  return `WIFI:T:${wifiSec};S:${inputValue};P:${wifiPass};;`;
+      default:      return inputValue;
     }
-    setMergeFiles(prev => [...prev, ...newFiles]);
-    setMergeDone(false);
   };
 
-  const moveFile = (index: number, dir: -1 | 1) => {
-    const newArr = [...mergeFiles];
-    const swapIdx = index + dir;
-    if (swapIdx < 0 || swapIdx >= newArr.length) return;
-    [newArr[index], newArr[swapIdx]] = [newArr[swapIdx], newArr[index]];
-    setMergeFiles(newArr);
-  };
-
-  const removeMergeFile = (id: string) => setMergeFiles(prev => prev.filter(f => f.id !== id));
-
-  const doMerge = async () => {
-    if (mergeFiles.length < 2) { setMergeError('Add at least 2 PDF files to merge.'); return; }
-    setMerging(true); setMergeError(''); setMergeDone(false);
+  const generateQR = async () => {
+    if (!inputValue.trim()) { setGenError('Please enter some content first!'); return; }
+    setGenError(''); setGenerating(true);
     try {
-      const merged = await PDFDocument.create();
-      for (const item of mergeFiles) {
-        const buf = await item.file.arrayBuffer();
-        const src = await PDFDocument.load(buf, { ignoreEncryption: true });
-        const pages = await merged.copyPages(src, src.getPageIndices());
-        pages.forEach(p => merged.addPage(p));
-      }
-      const bytes = await merged.save();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = `merged_${Date.now()}.pdf`;
-      await downloadBlob(blob, fileName, showNotification);
-      setMergeDone(true);
-    } catch (err) {
-      console.error(err);
-      setMergeError('Merge failed. Please try again.');
+      const dataUrl = await QRCode.toDataURL(buildQrString(), {
+        width: qrSize, margin: 2,
+        color: { dark: fgColor, light: bgColor },
+        errorCorrectionLevel: 'H',
+      });
+      setQrDataUrl(dataUrl);
+    } catch { setGenError('Failed to generate QR. Please try again.'); }
+    setGenerating(false);
+  };
+
+  const saveQr = async () => {
+    if (!qrDataUrl) {
+      showNotification('No QR code to save', 'error');
+      return;
     }
-    setMerging(false);
+    const blob = await fetch(qrDataUrl).then(r => r.blob());
+    await downloadBlob(blob, `qr-code-${Date.now()}.png`, showNotification);
   };
 
-  // ---- Split ----
-  const handleSplitFile = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    setSplitError(''); setSplitResults([]);
-    const file = fileList[0];
-    if (file.type !== 'application/pdf') { setSplitError('Please select a PDF file.'); return; }
+  const copyImage = async () => {
+    if (!qrDataUrl) return;
     try {
-      const pageCount = await loadPDF(file);
-      setSplitFile({ id: `pdf_${Date.now()}`, file, name: file.name, pageCount, size: file.size });
-      setSplitRanges(`1-${pageCount}`);
-    } catch { setSplitError('Could not read PDF. File may be corrupted.'); }
-  };
-
-  const parseRanges = (input: string, maxPage: number): number[][] => {
-    return input.split(',').map(r => {
-      const parts = r.trim().split('-').map(n => parseInt(n.trim()));
-      if (parts.length === 1 && !isNaN(parts[0])) return [parts[0]];
-      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-        const pages = [];
-        for (let i = parts[0]; i <= parts[1]; i++) pages.push(i);
-        return pages;
-      }
-      return [];
-    }).filter(r => r.length > 0 && r.every(p => p >= 1 && p <= maxPage));
-  };
-
-  const doSplit = async () => {
-    if (!splitFile) return;
-    setSplitting(true); setSplitError(''); setSplitResults([]);
-    try {
-      const ranges = parseRanges(splitRanges, splitFile.pageCount);
-      if (ranges.length === 0) { setSplitError('Invalid page ranges. Example: 1-3, 4-6'); setSplitting(false); return; }
-      const buf = await splitFile.file.arrayBuffer();
-      const src = await PDFDocument.load(buf, { ignoreEncryption: true });
-      const results: { name: string; blob: Blob }[] = [];
-      for (let i = 0; i < ranges.length; i++) {
-        const newPdf = await PDFDocument.create();
-        const pageIndices = ranges[i].map(p => p - 1);
-        const pages = await newPdf.copyPages(src, pageIndices);
-        pages.forEach(p => newPdf.addPage(p));
-        const bytes = await newPdf.save();
-        const blob = new Blob([bytes], { type: 'application/pdf' });
-        results.push({ name: `split_part${i + 1}_${Date.now()}.pdf`, blob });
-      }
-      setSplitResults(results);
-      showNotification(`PDF split into ${results.length} parts`, 'info');
-    } catch (err) {
-      console.error(err);
-      setSplitError('Split failed. Please try again.');
+      const blob = await fetch(qrDataUrl).then(r => r.blob());
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      setCopied(true);
+      showNotification('QR image copied to clipboard', 'info');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      showNotification('Copy failed. Try long-press instead.', 'error');
+      setCopied(false);
     }
-    setSplitting(false);
   };
 
-  const downloadSplit = async (item: { name: string; blob: Blob }) => {
-    await downloadBlob(item.blob, item.name, showNotification);
+  const resetGen = () => { setQrDataUrl(null); setInputValue(''); setGenError(''); };
+
+  const stopCamera = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setScanning(false);
+  }, []);
+
+  useEffect(() => () => stopCamera(), [stopCamera]);
+
+  const scanFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.readyState < 2) {
+      rafRef.current = requestAnimationFrame(scanFrame); return;
+    }
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    if (code) { setScanResult(code.data); stopCamera(); showNotification('QR code detected!', 'info'); return; }
+    rafRef.current = requestAnimationFrame(scanFrame);
+  }, [stopCamera]);
+
+  const startCamera = async () => {
+    setScanError(''); setScanResult(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      setScanning(true);
+      rafRef.current = requestAnimationFrame(scanFrame);
+    } catch { setScanError('Camera access denied.'); }
+  };
+
+  const handleScanFile = async (file: File) => {
+    setScanError(''); setScanResult(null);
+    try {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await new Promise(r => { img.onload = r; });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if (code) { setScanResult(code.data); showNotification('QR code scanned!', 'info'); return; }
+      setScanError('No QR code found in this image.');
+    } catch { setScanError('Failed to scan the image.'); }
+  };
+
+  const copyScanResult = async () => {
+    if (!scanResult) return;
+    await navigator.clipboard.writeText(scanResult);
+    setScanCopied(true);
+    showNotification('Text copied to clipboard!', 'info');
+    setTimeout(() => setScanCopied(false), 2000);
   };
 
   return (
     <motion.div className="space-y-8 relative">
       <AnimatePresence>
         {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className={cn(
-              "fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md",
-              notification.type === 'error' ? "bg-red-500/90 text-white" : "bg-emerald-500/90 text-white"
-            )}
-          >
+          <motion.div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md bg-emerald-500/90 text-white">
             {notification.message}
           </motion.div>
         )}
       </AnimatePresence>
 
       <header>
-        <div className="flex items-center gap-3 mb-1">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/5">
-            <FileText className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">PDF Tools</h1>
-            <p className="text-text-dim text-xs">Merge & split PDF files. 100% offline.</p>
-          </div>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center"><QrCode className="w-5 h-5" /></div>
+          <div><h1 className="text-2xl font-bold">QR Code Studio</h1><p className="text-text-dim text-xs">Generate & scan QR codes</p></div>
         </div>
       </header>
 
       <div className="flex gap-2 p-1 bg-surface border border-border rounded-xl w-fit">
-        {(['merge', 'split'] as Tab[]).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className={cn('px-5 py-2 rounded-lg text-sm font-semibold transition-all capitalize',
-              tab === t ? 'bg-accent-grad text-white shadow-lg' : 'text-text-dim hover:text-white'
-            )}
-          >{t === 'merge' ? 'Merge' : 'Split'}</button>
+        {(['generate', 'scan'] as Tab[]).map(t => (
+          <button key={t} onClick={() => setTab(t)} className={cn('px-5 py-2 rounded-lg text-sm font-semibold capitalize', tab === t ? 'bg-accent-grad text-white' : 'text-text-dim hover:text-white')}>
+            {t === 'generate' ? 'Generate' : 'Scan'}
+          </button>
         ))}
       </div>
 
       <AnimatePresence mode="wait">
-        {tab === 'merge' && (
-          <motion.div key="merge" className="space-y-5">
+        {tab === 'generate' && (
+          <motion.div key="generate" className="space-y-5">
             <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-text-dim">Upload PDF Files</p>
-              <input ref={mergeInputRef} type="file" accept=".pdf" multiple className="hidden"
-                onChange={e => handleMergeFiles(e.target.files)}
-              />
-              <button onClick={() => mergeInputRef.current?.click()}
-                className="w-full py-8 border-2 border-dashed border-border rounded-xl flex flex-col items-center gap-3 text-text-dim hover:border-purple-500/40 hover:text-white transition-all"
-              >
-                <Upload className="w-8 h-8" />
-                <span className="text-xs font-semibold uppercase tracking-wider">Upload PDF Files</span>
-                <span className="text-[10px]">Select multiple PDFs to merge</span>
-              </button>
+              <p className="text-[10px] font-bold uppercase">QR Type</p>
+              <div className="flex flex-wrap gap-2">
+                {QR_TYPES.map(qt => (
+                  <button key={qt.id} onClick={() => { setQrType(qt.id); setInputValue(''); setQrDataUrl(null); }}
+                    className={cn('flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-semibold', qrType === qt.id ? 'border-purple-500 bg-purple-500/10 text-white' : 'border-border text-text-dim hover:text-white')}>
+                    {qt.icon} {qt.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {mergeFiles.length > 0 && (
-              <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-                <div className="flex justify-between">
-                  <p className="text-[10px] font-bold uppercase">Order ({mergeFiles.length})</p>
-                  <button onClick={() => setMergeFiles([])} className="text-red-400 text-[10px]">CLEAR ALL</button>
+            <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
+              <p className="text-[10px] font-bold uppercase">Content</p>
+              <input type="text" value={inputValue} onChange={e => { setInputValue(e.target.value); setQrDataUrl(null); }}
+                placeholder={QR_TYPES.find(q => q.id === qrType)?.placeholder}
+                className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm" />
+              {qrType === 'wifi' && (
+                <div className="flex flex-wrap gap-3">
+                  <input type="text" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="Password" className="flex-1 min-w-[120px] bg-white/5 border border-border rounded-xl px-4 py-3 text-sm" />
+                  <select value={wifiSec} onChange={e => setWifiSec(e.target.value)} className="flex-1 min-w-[100px] bg-white/5 border border-border rounded-xl px-4 py-3 text-sm">
+                    <option>WPA</option><option>WEP</option><option>nopass</option>
+                  </select>
                 </div>
-                {mergeFiles.map((item, idx) => (
-                  <div key={item.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl">
-                    <div className="flex flex-col gap-1">
-                      <button onClick={() => moveFile(idx, -1)} disabled={idx === 0} className="text-text-dim hover:text-white"><ChevronUp className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => moveFile(idx, 1)} disabled={idx === mergeFiles.length-1} className="text-text-dim hover:text-white"><ChevronDown className="w-3.5 h-3.5" /></button>
-                    </div>
-                    <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center"><FileText className="w-4 h-4 text-red-400" /></div>
-                    <div className="flex-1"><p className="text-sm truncate">{item.name}</p><p className="text-[10px] text-text-dim">{item.pageCount} pages • {formatSize(item.size)}</p></div>
-                    <button onClick={() => removeMergeFile(item.id)}><X className="w-4 h-4 text-text-dim hover:text-red-400" /></button>
-                  </div>
-                ))}
-                <button onClick={() => mergeInputRef.current?.click()} className="w-full py-2.5 bg-white/5 rounded-xl text-xs">+ Add More Files</button>
-              </div>
+              )}
+              {genError && <p className="text-red-400 text-xs">{genError}</p>}
+            </div>
+
+            <div className="p-6 bg-surface border border-border rounded-[24px] space-y-5">
+              <p className="text-[10px] font-bold uppercase">Processing Config</p>
+              <div><p className="text-[10px] text-text-dim">QR Color</p><div className="flex gap-2 flex-wrap">{COLORS.map(c => (<button key={c} onClick={() => setFgColor(c)} style={{backgroundColor: c}} className={cn('w-8 h-8 rounded-lg border-2', fgColor === c ? 'border-purple-400 scale-110' : 'border-transparent')} />))}</div></div>
+              <div><div className="flex justify-between"><span className="text-[10px] text-text-dim">Size</span><span className="text-[10px] text-purple-400">{qrSize}px</span></div><input type="range" min={128} max={512} step={16} value={qrSize} onChange={e => { setQrSize(+e.target.value); setQrDataUrl(null); }} className="w-full accent-purple-400" /></div>
+            </div>
+
+            {!qrDataUrl ? (
+              <button onClick={generateQR} disabled={generating} className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold disabled:opacity-50 flex items-center justify-center gap-2">
+                {generating ? <><span className="animate-spin">↻</span> Generating...</> : <><QrCode className="w-4 h-4" /> Generate QR Code</>}
+              </button>
+            ) : (
+              <motion.div className="p-6 bg-surface border border-border rounded-[24px] space-y-5">
+                <div className="flex justify-between"><p className="text-[10px] font-bold uppercase">Your QR Code</p><button onClick={resetGen}><X className="w-4 h-4" /></button></div>
+                <div className="flex justify-center"><div className="p-4 rounded-2xl" style={{backgroundColor: bgColor}}><img src={qrDataUrl} alt="QR" style={{width: Math.min(qrSize,260), height: Math.min(qrSize,260)}} /></div></div>
+                <p className="text-center text-[10px] text-text-dim">💡 Long-press the QR code → "Save Image"</p>
+                <div className="flex gap-3">
+                  <button onClick={saveQr} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2"><Download className="w-4 h-4" /> Save</button>
+                  <button onClick={copyImage} className="px-4 py-2.5 bg-white/5 border border-border rounded-xl text-white text-sm flex items-center gap-2">{copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}{copied ? 'Copied!' : 'Copy Image'}</button>
+                </div>
+              </motion.div>
             )}
-
-            {mergeError && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{mergeError}</div>}
-            {mergeDone && <div className="p-4 bg-emerald-500/10 rounded-xl text-emerald-400 text-xs flex items-center gap-2"><Check className="w-4 h-4" /> Merge complete!</div>}
-
-            <button onClick={doMerge} disabled={mergeFiles.length < 2 || merging}
-              className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold disabled:opacity-40 flex items-center justify-center gap-2">
-              {merging ? <><span className="animate-spin">↻</span> Merging...</> : <><Merge className="w-4 h-4" /> Merge {mergeFiles.length} PDFs</>}
-            </button>
           </motion.div>
         )}
 
-        {tab === 'split' && (
-          <motion.div key="split" className="space-y-5">
-            <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-              <p className="text-[10px] font-bold uppercase">Upload PDF File</p>
-              <input ref={splitInputRef} type="file" accept=".pdf" className="hidden" onChange={e => handleSplitFile(e.target.files)} />
-              {!splitFile ? (
-                <button onClick={() => splitInputRef.current?.click()} className="w-full py-8 border-2 border-dashed rounded-xl flex flex-col items-center gap-3">
-                  <Upload className="w-8 h-8" /><span className="text-xs">Upload PDF File</span>
-                </button>
-              ) : (
-                <div className="flex items-center gap-3 p-4 bg-white/5 rounded-xl">
-                  <FileText className="w-5 h-5 text-red-400" />
-                  <div className="flex-1"><p className="text-sm truncate">{splitFile.name}</p><p className="text-[10px] text-text-dim">{splitFile.pageCount} pages • {formatSize(splitFile.size)}</p></div>
-                  <button onClick={() => setSplitFile(null)}><X className="w-4 h-4" /></button>
-                </div>
-              )}
+        {tab === 'scan' && (
+          <motion.div key="scan" className="space-y-5">
+            <div className="p-6 bg-surface border border-border rounded-[24px]">
+              <p className="text-[10px] font-bold uppercase mb-4">Camera Scanner</p>
+              <div className="relative w-full aspect-square max-w-sm mx-auto bg-black/40 rounded-2xl overflow-hidden">
+                <video ref={videoRef} className={cn('w-full h-full object-cover', !scanning && 'hidden')} playsInline muted />
+                {!scanning && <div className="absolute inset-0 flex flex-col items-center justify-center"><ScanLine className="w-12 h-12 opacity-30" /><p className="text-xs">Camera is off</p></div>}
+                {scanning && (<div className="absolute inset-0 flex items-center justify-center"><div className="w-48 h-48 border-2 border-purple-400 rounded-2xl relative"><div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-purple-400" /><div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-purple-400" /><div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-purple-400" /><div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-purple-400" /><motion.div animate={{y: [0,176,0]}} transition={{duration:2, repeat:Infinity}} className="absolute left-1 right-1 h-0.5 bg-purple-400" /></div></div>)}
+              </div>
+              <div className="flex gap-3 mt-4">
+                {!scanning ? <button onClick={startCamera} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white"><Camera className="w-4 h-4 inline mr-2" /> Open Camera</button> : <button onClick={stopCamera} className="flex-1 py-2.5 bg-white/5 border border-border rounded-xl hover:border-red-500/40"><X className="w-4 h-4 inline mr-2" /> Stop</button>}
+              </div>
             </div>
 
-            {splitFile && (
-              <div className="p-6 bg-surface border border-border rounded-[24px] space-y-4">
-                <p className="text-[10px] font-bold uppercase">Page Ranges</p>
-                <p className="text-xs text-text-dim">Total pages: <span className="text-white font-bold">{splitFile.pageCount}</span></p>
-                <input type="text" value={splitRanges} onChange={e => setSplitRanges(e.target.value)} placeholder="e.g. 1-3, 4-6, 7" className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm" />
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={() => setSplitRanges(`1-${Math.ceil(splitFile.pageCount/2)}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">First Half</button>
-                  <button onClick={() => setSplitRanges(`${Math.ceil(splitFile.pageCount/2)+1}-${splitFile.pageCount}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Second Half</button>
-                  <button onClick={() => setSplitRanges(Array.from({length: splitFile.pageCount}, (_,i)=>i+1).join(', '))} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Each Page</button>
-                </div>
-              </div>
-            )}
+            <div className="p-6 bg-surface border border-border rounded-[24px] text-center">
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleScanFile(e.target.files[0])} />
+              <button onClick={() => fileInputRef.current?.click()} className="w-full py-8 border-2 border-dashed rounded-xl flex flex-col items-center gap-2"><Upload className="w-8 h-8" /><span>Upload QR Image</span></button>
+            </div>
 
-            {splitError && <div className="p-4 bg-red-500/10 rounded-xl text-red-400 text-xs">{splitError}</div>}
+            {scanError && <div className="p-4 bg-red-500/10 rounded-xl text-red-400 text-xs">{scanError}</div>}
 
-            {splitResults.length > 0 && (
-              <div className="p-6 bg-surface border border-emerald-500/20 rounded-[24px] space-y-4">
-                <p className="text-[10px] font-bold text-emerald-400">Split Complete — {splitResults.length} parts</p>
-                {splitResults.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
-                    <div><span className="text-sm">Part {idx+1}</span><span className="text-[10px] text-text-dim ml-2">{formatSize(item.blob.size)}</span></div>
-                    <button onClick={() => downloadSplit(item)} className="flex items-center gap-2 px-3 py-1.5 bg-accent-grad rounded-lg text-white text-[10px]"><Download className="w-3.5 h-3.5" /> Save</button>
+            <AnimatePresence>
+              {scanResult && (
+                <motion.div className="p-6 bg-surface border border-emerald-500/20 rounded-[24px] space-y-4">
+                  <div className="flex justify-between"><span className="text-[10px] font-bold text-emerald-400">QR Code Detected!</span><button onClick={() => setScanResult(null)}><Trash2 className="w-4 h-4" /></button></div>
+                  <p className="text-sm bg-white/5 rounded-xl p-4 break-all">{scanResult}</p>
+                  <div className="flex gap-3">
+                    {scanResult.startsWith('http') && <a href={scanResult} target="_blank" className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white text-center">Open Link</a>}
+                    <button onClick={copyScanResult} className="flex-1 py-2.5 bg-white/5 border border-border rounded-xl">{scanCopied ? <Check className="w-4 h-4 inline text-emerald-400" /> : <Copy className="w-4 h-4 inline" />} {scanCopied ? 'Copied!' : 'Copy'}</button>
                   </div>
-                ))}
-              </div>
-            )}
-
-            <button onClick={doSplit} disabled={!splitFile || splitting} className="w-full py-3.5 bg-accent-grad rounded-xl text-white font-bold disabled:opacity-40 flex items-center justify-center gap-2">
-              {splitting ? <><span className="animate-spin">↻</span> Splitting...</> : <><Scissors className="w-4 h-4" /> Split PDF</>}
-            </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
