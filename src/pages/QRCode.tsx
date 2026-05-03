@@ -7,6 +7,8 @@ import {
 import { cn } from '../lib/utils';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 type Tab = 'generate' | 'scan';
 type QRType = 'text' | 'url' | 'wifi' | 'phone' | 'email';
@@ -46,6 +48,26 @@ export default function QRCodePage() {
   const rafRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const saveToDevice = async (base64Data: string, fileName: string) => {
+    try {
+      const pureBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+      await Filesystem.writeFile({
+        path: fileName,
+        data: pureBase64,
+        directory: Directory.Documents
+      });
+      showNotification(`✅ Saved to Documents/${fileName}`, 'info');
+      await Share.share({
+        title: 'QR Code Saved',
+        text: 'Check out my QR code!',
+        url: `file://${fileName}`
+      }).catch(() => {});
+    } catch (error) {
+      console.error('Save error:', error);
+      showNotification('Failed to save file. Please check storage permissions.', 'error');
+    }
+  };
+
   useEffect(() => {
     if (notification) {
       const timer = setTimeout(() => setNotification(null), 4000);
@@ -80,20 +102,15 @@ export default function QRCodePage() {
     setGenerating(false);
   };
 
-  // ✅ FIXED: uses anchor tag directly — no downloadBlob dependency
-  const saveQr = () => {
+  const saveQr = async () => {
     if (!qrDataUrl) {
       showNotification('No QR code to save', 'error');
       return;
     }
-    const a = document.createElement('a');
-    a.href = qrDataUrl;
-    a.download = `qr-code-${Date.now()}.png`;
-    a.click();
-    showNotification('QR code downloaded!', 'info');
+    const fileName = `qr-code-${Date.now()}.png`;
+    await saveToDevice(qrDataUrl, fileName);
   };
 
-  // ✅ FIXED: falls back to download if clipboard API is unavailable
   const copyImage = async () => {
     if (!qrDataUrl) return;
     try {
@@ -102,13 +119,9 @@ export default function QRCodePage() {
       setCopied(true);
       showNotification('QR image copied to clipboard', 'info');
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback: trigger download instead
-      const a = document.createElement('a');
-      a.href = qrDataUrl;
-      a.download = `qr-code-${Date.now()}.png`;
-      a.click();
-      showNotification('Clipboard not supported — downloading instead.', 'info');
+    } catch (err) {
+      const shouldSave = confirm('Copy not supported. Save the QR code to your device instead?');
+      if (shouldSave) saveQr();
     }
   };
 
@@ -244,7 +257,7 @@ export default function QRCodePage() {
               <motion.div className="p-6 bg-surface border border-border rounded-[24px] space-y-5">
                 <div className="flex justify-between"><p className="text-[10px] font-bold uppercase">Your QR Code</p><button onClick={resetGen}><X className="w-4 h-4" /></button></div>
                 <div className="flex justify-center"><div className="p-4 rounded-2xl" style={{backgroundColor: bgColor}}><img src={qrDataUrl} alt="QR" style={{width: Math.min(qrSize,260), height: Math.min(qrSize,260)}} /></div></div>
-                <p className="text-center text-[10px] text-text-dim">💡 Long-press the QR code → "Save Image"</p>
+                <p className="text-center text-[10px] text-text-dim">💡 Tap "Save" to store in Documents</p>
                 <div className="flex gap-3">
                   <button onClick={saveQr} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2"><Download className="w-4 h-4" /> Save</button>
                   <button onClick={copyImage} className="px-4 py-2.5 bg-white/5 border border-border rounded-xl text-white text-sm flex items-center gap-2">{copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}{copied ? 'Copied!' : 'Copy Image'}</button>
