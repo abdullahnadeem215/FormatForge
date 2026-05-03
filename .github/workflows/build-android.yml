@@ -1,0 +1,62 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm' # Caches node_modules to speed up consecutive builds
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'          # Use Java 17 for better compatibility with Kotlin/Gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3 # Caches Gradle downloads so you don't rely on their CDN every run
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      
+      - name: Install Capacitor and plugins
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+          npm install @capacitor-community/text-to-speech --legacy-peer-deps   # Keep if needed
+          npm install @capacitor-mlkit/subject-segmentation --legacy-peer-deps # Background remover
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Copy web build to Android
+        run: npx cap copy
+
+      - name: Sync Capacitor
+        run: npx cap sync
+
+      - name: Fix Gradle 502 Error (Bypass corrupted -all zip)
+        run: sed -i 's/-all.zip/-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew clean assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: formatforge-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
