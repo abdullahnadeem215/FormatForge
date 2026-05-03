@@ -7,7 +7,6 @@ import {
 import { cn } from '../lib/utils';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
-import { downloadBlob } from '../utils/download';
 
 type Tab = 'generate' | 'scan';
 type QRType = 'text' | 'url' | 'wifi' | 'phone' | 'email';
@@ -81,15 +80,20 @@ export default function QRCodePage() {
     setGenerating(false);
   };
 
-  const saveQr = async () => {
+  // ✅ FIXED: uses anchor tag directly — no downloadBlob dependency
+  const saveQr = () => {
     if (!qrDataUrl) {
       showNotification('No QR code to save', 'error');
       return;
     }
-    const blob = await fetch(qrDataUrl).then(r => r.blob());
-    await downloadBlob(blob, `qr-code-${Date.now()}.png`, showNotification);
+    const a = document.createElement('a');
+    a.href = qrDataUrl;
+    a.download = `qr-code-${Date.now()}.png`;
+    a.click();
+    showNotification('QR code downloaded!', 'info');
   };
 
+  // ✅ FIXED: falls back to download if clipboard API is unavailable
   const copyImage = async () => {
     if (!qrDataUrl) return;
     try {
@@ -99,8 +103,12 @@ export default function QRCodePage() {
       showNotification('QR image copied to clipboard', 'info');
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      showNotification('Copy failed. Try long-press instead.', 'error');
-      setCopied(false);
+      // Fallback: trigger download instead
+      const a = document.createElement('a');
+      a.href = qrDataUrl;
+      a.download = `qr-code-${Date.now()}.png`;
+      a.click();
+      showNotification('Clipboard not supported — downloading instead.', 'info');
     }
   };
 
@@ -255,6 +263,7 @@ export default function QRCodePage() {
                 {!scanning && <div className="absolute inset-0 flex flex-col items-center justify-center"><ScanLine className="w-12 h-12 opacity-30" /><p className="text-xs">Camera is off</p></div>}
                 {scanning && (<div className="absolute inset-0 flex items-center justify-center"><div className="w-48 h-48 border-2 border-purple-400 rounded-2xl relative"><div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-purple-400" /><div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-purple-400" /><div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-purple-400" /><div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-purple-400" /><motion.div animate={{y: [0,176,0]}} transition={{duration:2, repeat:Infinity}} className="absolute left-1 right-1 h-0.5 bg-purple-400" /></div></div>)}
               </div>
+              <canvas ref={canvasRef} className="hidden" />
               <div className="flex gap-3 mt-4">
                 {!scanning ? <button onClick={startCamera} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white"><Camera className="w-4 h-4 inline mr-2" /> Open Camera</button> : <button onClick={stopCamera} className="flex-1 py-2.5 bg-white/5 border border-border rounded-xl hover:border-red-500/40"><X className="w-4 h-4 inline mr-2" /> Stop</button>}
               </div>
