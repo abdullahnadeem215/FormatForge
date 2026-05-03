@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   FileText, Download, Upload, Trash2, X,
@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { PDFDocument } from 'pdf-lib';
-import { downloadBlob } from '../utils/download';
 
 type Tab = 'merge' | 'split';
 
@@ -17,6 +16,16 @@ interface PDFFile {
   pageCount: number;
   size: number;
 }
+
+// ✅ Reusable download helper — no external dependency
+const triggerDownload = (blob: Blob, fileName: string) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 export default function PDFTools() {
   const [tab, setTab] = useState<Tab>('merge');
@@ -98,8 +107,9 @@ export default function PDFTools() {
       }
       const bytes = await merged.save();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = `merged_${Date.now()}.pdf`;
-      await downloadBlob(blob, fileName, showNotification);
+      // ✅ FIXED: direct anchor download
+      triggerDownload(blob, `merged_${Date.now()}.pdf`);
+      showNotification('Merge complete! Downloading…', 'info');
       setMergeDone(true);
     } catch (err) {
       console.error(err);
@@ -161,8 +171,10 @@ export default function PDFTools() {
     setSplitting(false);
   };
 
-  const downloadSplit = async (item: { name: string; blob: Blob }) => {
-    await downloadBlob(item.blob, item.name, showNotification);
+  // ✅ FIXED: direct anchor download
+  const downloadSplit = (item: { name: string; blob: Blob }) => {
+    triggerDownload(item.blob, item.name);
+    showNotification(`Downloading ${item.name}`, 'info');
   };
 
   return (
@@ -232,7 +244,7 @@ export default function PDFTools() {
                   <div key={item.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl">
                     <div className="flex flex-col gap-1">
                       <button onClick={() => moveFile(idx, -1)} disabled={idx === 0} className="text-text-dim hover:text-white"><ChevronUp className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => moveFile(idx, 1)} disabled={idx === mergeFiles.length-1} className="text-text-dim hover:text-white"><ChevronDown className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => moveFile(idx, 1)} disabled={idx === mergeFiles.length - 1} className="text-text-dim hover:text-white"><ChevronDown className="w-3.5 h-3.5" /></button>
                     </div>
                     <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center"><FileText className="w-4 h-4 text-red-400" /></div>
                     <div className="flex-1"><p className="text-sm truncate">{item.name}</p><p className="text-[10px] text-text-dim">{item.pageCount} pages • {formatSize(item.size)}</p></div>
@@ -277,9 +289,9 @@ export default function PDFTools() {
                 <p className="text-xs text-text-dim">Total pages: <span className="text-white font-bold">{splitFile.pageCount}</span></p>
                 <input type="text" value={splitRanges} onChange={e => setSplitRanges(e.target.value)} placeholder="e.g. 1-3, 4-6, 7" className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm" />
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => setSplitRanges(`1-${Math.ceil(splitFile.pageCount/2)}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">First Half</button>
-                  <button onClick={() => setSplitRanges(`${Math.ceil(splitFile.pageCount/2)+1}-${splitFile.pageCount}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Second Half</button>
-                  <button onClick={() => setSplitRanges(Array.from({length: splitFile.pageCount}, (_,i)=>i+1).join(', '))} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Each Page</button>
+                  <button onClick={() => setSplitRanges(`1-${Math.ceil(splitFile.pageCount / 2)}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">First Half</button>
+                  <button onClick={() => setSplitRanges(`${Math.ceil(splitFile.pageCount / 2) + 1}-${splitFile.pageCount}`)} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Second Half</button>
+                  <button onClick={() => setSplitRanges(Array.from({ length: splitFile.pageCount }, (_, i) => i + 1).join(', '))} className="px-3 py-1.5 bg-white/5 rounded-lg text-[10px]">Each Page</button>
                 </div>
               </div>
             )}
@@ -291,7 +303,7 @@ export default function PDFTools() {
                 <p className="text-[10px] font-bold text-emerald-400">Split Complete — {splitResults.length} parts</p>
                 {splitResults.map((item, idx) => (
                   <div key={idx} className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
-                    <div><span className="text-sm">Part {idx+1}</span><span className="text-[10px] text-text-dim ml-2">{formatSize(item.blob.size)}</span></div>
+                    <div><span className="text-sm">Part {idx + 1}</span><span className="text-[10px] text-text-dim ml-2">{formatSize(item.blob.size)}</span></div>
                     <button onClick={() => downloadSplit(item)} className="flex items-center gap-2 px-3 py-1.5 bg-accent-grad rounded-lg text-white text-[10px]"><Download className="w-3.5 h-3.5" /> Save</button>
                   </div>
                 ))}
