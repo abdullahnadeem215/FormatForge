@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   FileText, Download, Upload, Trash2, X,
@@ -35,6 +35,21 @@ export default function PDFTools() {
   const [splitResults, setSplitResults] = useState<{ name: string; blob: Blob }[]>([]);
   const splitInputRef                   = useRef<HTMLInputElement>(null);
 
+  // Notification state
+  const [notification, setNotification] = useState<{ message: string; type: 'info' | 'error' } | null>(null);
+
+  // Auto-dismiss notification
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  const showNotification = (message: string, type: 'info' | 'error' = 'info') => {
+    setNotification({ message, type });
+  };
+
   // ── Helpers ──
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -46,6 +61,36 @@ export default function PDFTools() {
     const buf = await file.arrayBuffer();
     const pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
     return pdf.getPageCount();
+  };
+
+  // ── Generic download (mobile‑friendly) ──
+  const downloadBlob = async (blob: Blob, fileName: string) => {
+    try {
+      // 1. Use Web Share API on mobile if available
+      if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await navigator.share({
+          title: 'PDF File',
+          files: [file],
+        });
+        showNotification(`Shared: ${fileName}`, 'info');
+        return;
+      }
+
+      // 2. Fallback: create object URL + a.download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showNotification(`Downloaded: ${fileName} 📁`, 'info');
+    } catch (err) {
+      console.error('Download failed:', err);
+      showNotification('Could not save automatically. Try long‑pressing the button.', 'error');
+    }
   };
 
   // ── MERGE ──
@@ -88,12 +133,13 @@ export default function PDFTools() {
       }
       const bytes = await merged.save();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `merged_${Date.now()}.pdf`; a.click();
-      URL.revokeObjectURL(url);
+      const fileName = `merged_${Date.now()}.pdf`;
+      await downloadBlob(blob, fileName);
       setMergeDone(true);
-    } catch { setMergeError('Merge failed. Please try again.'); }
+    } catch (err) {
+      console.error(err);
+      setMergeError('Merge failed. Please try again.');
+    }
     setMerging(false);
   };
 
@@ -110,7 +156,6 @@ export default function PDFTools() {
     } catch { setSplitError('Could not read PDF. File may be corrupted.'); }
   };
 
-  // Parse ranges like "1-3, 4-6, 7"
   const parseRanges = (input: string, maxPage: number): number[][] => {
     return input.split(',').map(r => {
       const parts = r.trim().split('-').map(n => parseInt(n.trim()));
@@ -143,15 +188,16 @@ export default function PDFTools() {
         results.push({ name: `split_part${i + 1}_${Date.now()}.pdf`, blob });
       }
       setSplitResults(results);
-    } catch { setSplitError('Split failed. Please try again.'); }
+      showNotification(`PDF split into ${results.length} parts`, 'info');
+    } catch (err) {
+      console.error(err);
+      setSplitError('Split failed. Please try again.');
+    }
     setSplitting(false);
   };
 
-  const downloadSplit = (item: { name: string; blob: Blob }) => {
-    const url = URL.createObjectURL(item.blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = item.name; a.click();
-    URL.revokeObjectURL(url);
+  const downloadSplit = async (item: { name: string; blob: Blob }) => {
+    await downloadBlob(item.blob, item.name);
   };
 
   return (
@@ -159,8 +205,25 @@ export default function PDFTools() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="space-y-8"
+      className="space-y-8 relative"
     >
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={cn(
+              "fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-sm font-medium shadow-lg backdrop-blur-md",
+              notification.type === 'error' ? "bg-red-500/90 text-white" : "bg-emerald-500/90 text-white"
+            )}
+          >
+            {notification.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header>
         <div className="flex items-center gap-3 mb-1">
@@ -256,7 +319,7 @@ export default function PDFTools() {
 
             {mergeDone && (
               <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
-                <Check className="w-4 h-4" /> PDF merged and downloaded successfully!
+                <Check className="w-4 h-4" /> Merge complete! PDF saved/shared.
               </div>
             )}
 
