@@ -83,57 +83,44 @@ export default function QRCodePage() {
     setGenerating(false);
   };
 
-  // ✅ MOBILE-FRIENDLY DOWNLOAD (works on iOS/Android + shows notification)
-  const downloadQR = async () => {
+  // ✅ Mobile-friendly save/share
+  const saveQr = async () => {
     if (!qrDataUrl) {
-      showNotification('No QR code to download', 'error');
+      showNotification('No QR code to save', 'error');
       return;
     }
 
-    try {
-      // Convert data URL to blob
-      const res = await fetch(qrDataUrl);
-      const blob = await res.blob();
-      const fileName = `formatforge-qr-${Date.now()}.png`;
-
-      // 1. Use Web Share API on mobile (shares to Files / Photos / etc.)
-      if (navigator.share && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    if (navigator.share) {
+      try {
+        const blob = await (await fetch(qrDataUrl)).blob();
+        const file = new File([blob], `qr-code-${Date.now()}.png`, { type: 'image/png' });
         await navigator.share({
-          title: 'QR Code',
-          files: [new File([blob], fileName, { type: 'image/png' })],
+          title: 'Save QR Code',
+          files: [file],
         });
-        showNotification('QR code shared successfully ✓', 'info');
+        showNotification('Open share menu → Save to Files/Photos', 'info');
         return;
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('Share failed:', err);
+        }
       }
-
-      // 2. Fallback: create object URL and trigger download (works on desktop & some mobile browsers)
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      showNotification('QR code saved to your Downloads folder 📁', 'info');
-    } catch (err) {
-      console.error('Download failed:', err);
-      showNotification('Could not save automatically. Try long-pressing the QR code image.', 'error');
     }
+    // Fallback: long-press instruction
+    showNotification('👉 Long-press the QR code above and choose "Save Image"', 'info');
   };
 
-  const copyQR = async () => {
+  const copyImage = async () => {
     if (!qrDataUrl) return;
     try {
       const blob = await (await fetch(qrDataUrl)).blob();
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      setCopied(true); 
-      showNotification('QR code copied to clipboard!', 'info');
+      setCopied(true);
+      showNotification('QR image copied to clipboard', 'info');
       setTimeout(() => setCopied(false), 2000);
-    } catch { 
+    } catch {
+      showNotification('Copy failed. Try long-press instead.', 'error');
       setCopied(false);
-      showNotification('Failed to copy image', 'error');
     }
   };
 
@@ -264,11 +251,14 @@ export default function QRCodePage() {
                 className="w-full bg-white/5 border border-border rounded-xl px-4 py-3 text-sm text-white placeholder:text-text-dim focus:outline-none focus:border-purple-500/50 transition-colors"
               />
               {qrType === 'wifi' && (
-                <div className="flex gap-3">
+                // ✅ FIXED: responsive layout – stacks on narrow screens, side by side on wider
+                <div className="flex flex-wrap gap-3">
                   <input type="text" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="Password"
-                    className="flex-1 bg-white/5 border border-border rounded-xl px-4 py-3 text-sm text-white placeholder:text-text-dim focus:outline-none focus:border-purple-500/50 transition-colors"
+                    className="flex-1 min-w-[120px] bg-white/5 border border-border rounded-xl px-4 py-3 text-sm text-white placeholder:text-text-dim focus:outline-none focus:border-purple-500/50 transition-colors"
                   />
-                  <select value={wifiSec} onChange={e => setWifiSec(e.target.value)} className="bg-white/5 border border-border rounded-xl px-3 py-3 text-sm text-white focus:outline-none">
+                  <select value={wifiSec} onChange={e => setWifiSec(e.target.value)}
+                    className="flex-1 min-w-[100px] bg-white/5 border border-border rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
+                  >
                     <option value="WPA">WPA</option>
                     <option value="WEP">WEP</option>
                     <option value="nopass">Open</option>
@@ -318,15 +308,14 @@ export default function QRCodePage() {
                     <img src={qrDataUrl} alt="QR Code" className="rounded-xl" style={{ width: Math.min(qrSize, 260), height: Math.min(qrSize, 260) }} />
                   </div>
                 </div>
-                {/* Mobile hint */}
-                <p className="text-center text-[10px] text-text-dim">💡 Long-press the QR code to save image</p>
+                <p className="text-center text-[10px] text-text-dim">💡 Long-press the QR code → "Save Image"</p>
                 <div className="flex gap-3">
-                  <button onClick={downloadQR} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2">
+                  <button onClick={saveQr} className="flex-1 py-2.5 bg-accent-grad rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2">
                     <Download className="w-4 h-4" /> Save / Share
                   </button>
-                  <button onClick={copyQR} className="px-4 py-2.5 bg-white/5 border border-border rounded-xl text-white text-sm flex items-center gap-2 hover:border-white/20 transition-colors">
+                  <button onClick={copyImage} className="px-4 py-2.5 bg-white/5 border border-border rounded-xl text-white text-sm flex items-center gap-2 hover:border-white/20 transition-colors">
                     {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    {copied ? 'Copied!' : 'Copy'}
+                    {copied ? 'Copied!' : 'Copy Image'}
                   </button>
                 </div>
               </motion.div>
